@@ -1,55 +1,46 @@
 #include <ntifs.h>
 
-constexpr ULONG read_code  = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x776, METHOD_BUFFERED, FILE_SPECIAL_ACCESS); //custom io control codes for reading memory
-constexpr ULONG write_code = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x777, METHOD_BUFFERED, FILE_SPECIAL_ACCESS); //custom io control codes for writing memory
-
 extern "C" { //undocumented windows internal functions (exported by ntoskrnl)
 	NTKERNELAPI NTSTATUS IoCreateDriver(PUNICODE_STRING DriverName, PDRIVER_INITIALIZE InitializationFunction);
 	NTKERNELAPI NTSTATUS MmCopyVirtualMemory(PEPROCESS SourceProcess, PVOID SourceAddress, PEPROCESS TargetProcess, PVOID TargetAddress, SIZE_T BufferSize, KPROCESSOR_MODE PreviousMode, PSIZE_T ReturnSize);
 }
 
+constexpr ULONG init_code  = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x775, METHOD_BUFFERED, FILE_SPECIAL_ACCESS); //custom io control code for setting g_target_process by target process id
+constexpr ULONG read_code  = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x776, METHOD_BUFFERED, FILE_SPECIAL_ACCESS); //custom io control code for reading memory
+constexpr ULONG write_code = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x777, METHOD_BUFFERED, FILE_SPECIAL_ACCESS); //custom io control code for writing memory
+
 struct info_t { //message type that will be passed between user program and driver
-	UINT32 target_pid = 0; //process id of process we want to read from / write to
-	UINT64 target_address = 0x0; //address in the target proces we want to read from / write to
-	UINT64 buffer_address = 0x0; //address in our usermode process to copy to (read mode) / read from (write mode)
-	UINT64 size = 0; //size of memory to copy between our usermode process and target process
+	HANDLE target_pid = 0; //process id of process we want to read from / write to
+	void*  target_address = 0x0; //address in the target proces we want to read from / write to
+	void*  buffer_address = 0x0; //address in our usermode process to copy to (read mode) / read from (write mode)
+	SIZE_T size = 0; //size of memory to copy between our usermode process and target process
+	SIZE_T return_size = 0; //number of bytes successfully read / written
 };
-
-bool read_mem(int pid, void* addr, void* value, size_t size) {
-	PEPROCESS pe;
-	SIZE_T bytes;
-	PsLookupProcessByProcessId((HANDLE)pid, &pe);
-	ProbeForRead(addr, size, 1);
-	MmCopyVirtualMemory(pe, addr, PsGetCurrentProcess(), value, size, KernelMode, &bytes);
-	ObfDereferenceObject(pe);
-	return bytes == size;
-}
-
-bool write_mem(int pid, void* addr, void* value, size_t size) {
-	PEPROCESS pe;
-	SIZE_T bytes;
-	PsLookupProcessByProcessId((HANDLE)pid, &pe);
-	MmCopyVirtualMemory(PsGetCurrentProcess(), value, pe, addr, size, KernelMode, &bytes);
-	ObfDereferenceObject(pe);
-	return bytes == size;
-}
 
 NTSTATUS ctl_io(PDEVICE_OBJECT device_obj, PIRP irp) {
 	UNREFERENCED_PARAMETER(device_obj);
 	
+	static PEPROCESS g_target_process;
+
 	irp->IoStatus.Information = sizeof(info_t);
 	auto stack = IoGetCurrentIrpStackLocation(irp);
 	auto buffer = (info_t*)irp->AssociatedIrp.SystemBuffer;
 
 	if (stack) { //add error checking
 		if (buffer && sizeof(*buffer) >= sizeof(info_t)) {
-			if (stack->Parameters.DeviceIoControl.IoControlCode == read_code) { //if control code is read, copy target process memory to our process
-				if (buffer->target_address < 0x7FFFFFFFFFFF)
-					read_mem(buffer->target_pid, (void*)buffer->target_address, (void*)buffer->buffer_address, buffer->size);
+			const auto ctl_code = stack->Parameters.DeviceIoControl.IoControlCode;
+
+			if (ctl_code == init_code) { //if control code is find process, find the target process by its id and put it into g_target_process
+				PsLookupProcessByProcessId(buffer->target_pid, &g_target_process);
 			}
-			else if (stack->Parameters.DeviceIoControl.IoControlCode == write_code) { //if control code is write, copy our process memory to target process memory
-				if (buffer->target_address < 0x7FFFFFFFFFFF)
-					write_mem(buffer->target_pid, (void*)buffer->target_address, (void*)buffer->buffer_address, buffer->size);
+			else if (ctl_code == read_code) { //if control code is read, copy target process memory to our process
+				ProbeForRead(buffer->target_address, buffer->size, 1);
+				MmCopyVirtualMemory(g_target_process, buffer->target_address, PsGetCurrentProcess(), buffer->buffer_address, buffer->size, KernelMode, &buffer->return_size);
+				ObfDereferenceObject(g_target_process);
+			}
+			else if (ctl_code == write_code) { //if control code is write, copy our process memory to target process memory
+				MmCopyVirtualMemory(PsGetCurrentProcess(), buffer->buffer_address, g_target_process, buffer->target_address, buffer->size, KernelMode, &buffer->return_size);
+				ObfDereferenceObject(g_target_process);
 			}
 		}
 	}
