@@ -36,11 +36,10 @@ NTSTATUS ctl_io(PDEVICE_OBJECT device_obj, PIRP irp) {
 			else if (ctl_code == read_code) { //if control code is read, copy target process memory to our process
 				ProbeForRead(buffer->target_address, buffer->size, 1);
 				MmCopyVirtualMemory(g_target_process, buffer->target_address, PsGetCurrentProcess(), buffer->buffer_address, buffer->size, KernelMode, &buffer->return_size);
-				ObfDereferenceObject(g_target_process);
 			}
 			else if (ctl_code == write_code) { //if control code is write, copy our process memory to target process memory
+				ProbeForWrite(buffer->target_address, buffer->size, 1);
 				MmCopyVirtualMemory(PsGetCurrentProcess(), buffer->buffer_address, g_target_process, buffer->target_address, buffer->size, KernelMode, &buffer->return_size);
-				ObfDereferenceObject(g_target_process);
 			}
 		}
 	}
