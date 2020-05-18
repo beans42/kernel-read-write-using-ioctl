@@ -20,7 +20,7 @@ struct info_t { //message type that will be passed between user program and driv
 NTSTATUS ctl_io(PDEVICE_OBJECT device_obj, PIRP irp) {
 	UNREFERENCED_PARAMETER(device_obj);
 	
-	static PEPROCESS g_target_process;
+	static PEPROCESS s_target_process;
 
 	irp->IoStatus.Information = sizeof(info_t);
 	auto stack = IoGetCurrentIrpStackLocation(irp);
@@ -30,16 +30,14 @@ NTSTATUS ctl_io(PDEVICE_OBJECT device_obj, PIRP irp) {
 		if (buffer && sizeof(*buffer) >= sizeof(info_t)) {
 			const auto ctl_code = stack->Parameters.DeviceIoControl.IoControlCode;
 
-			if (ctl_code == init_code) { //if control code is find process, find the target process by its id and put it into g_target_process
-				PsLookupProcessByProcessId(buffer->target_pid, &g_target_process);
-			}
-			else if (ctl_code == read_code) { //if control code is read, copy target process memory to our process
-				ProbeForRead(buffer->target_address, buffer->size, 1);
-				MmCopyVirtualMemory(g_target_process, buffer->target_address, PsGetCurrentProcess(), buffer->buffer_address, buffer->size, KernelMode, &buffer->return_size);
-			}
-			else if (ctl_code == write_code) { //if control code is write, copy our process memory to target process memory
-				MmCopyVirtualMemory(PsGetCurrentProcess(), buffer->buffer_address, g_target_process, buffer->target_address, buffer->size, KernelMode, &buffer->return_size);
-			}
+			if (ctl_code == init_code) //if control code is find process, find the target process by its id and put it into g_target_process
+				PsLookupProcessByProcessId(buffer->target_pid, &s_target_process);
+
+			else if (ctl_code == read_code) //if control code is read, copy target process memory to our process
+				MmCopyVirtualMemory(s_target_process, buffer->target_address, PsGetCurrentProcess(), buffer->buffer_address, buffer->size, KernelMode, &buffer->return_size);
+
+			else if (ctl_code == write_code) //if control code is write, copy our process memory to target process memory
+				MmCopyVirtualMemory(PsGetCurrentProcess(), buffer->buffer_address, s_target_process, buffer->target_address, buffer->size, KernelMode, &buffer->return_size);
 		}
 	}
 
