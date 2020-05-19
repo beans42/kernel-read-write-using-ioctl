@@ -73,7 +73,7 @@ NTSTATUS real_main(PDRIVER_OBJECT driver_obj, PUNICODE_STRING registery_path) {
 	UNICODE_STRING dev_name, sym_link;
 	PDEVICE_OBJECT dev_obj;
 
-	RtlInitUnicodeString(&dev_name, L"\\Device\\cartidriver");
+	RtlInitUnicodeString(&dev_name, L"\\Device\\cartidriver"); //die lit
 	auto status = IoCreateDevice(driver_obj, 0, &dev_name, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, FALSE, &dev_obj);
 	if (status != STATUS_SUCCESS) return status;
 
